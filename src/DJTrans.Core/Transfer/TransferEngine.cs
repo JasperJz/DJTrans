@@ -440,8 +440,7 @@ public sealed class TransferEngine : IDisposable
         bool overwrite = false;
         if (File.Exists(dest))
         {
-            var policy = job.Options.ConflictPolicy;
-            // 智能跳过：目标同名同大小且首尾块指纹一致 → 静默跳过（增量导出，不打扰用户）
+            var policy = job.Options.ConflictPolicy;            // 智能跳过：目标同名同大小且首尾块指纹一致 → 静默跳过（增量导出，不打扰用户）
             if (policy == ConflictPolicy.SmartSkip
                 && req.SizeBytes == GetFileLength(dest)
                 && TransferJournal.QuickFingerprintEqual(req.SourcePath, dest, req.SizeBytes))
@@ -593,7 +592,7 @@ public sealed class TransferEngine : IDisposable
         }
 
         // ---------- 收尾 ----------
-        File.Move(part, dest, overwrite: true);
+        File.Move(part, dest, overwrite: overwrite || File.Exists(dest));
         if (job.Options.PreserveModifiedTime)
             File.SetLastWriteTimeUtc(dest, req.SourceMtimeUtc);
         TransferJournal.DeleteJournalFile(dest + ".djjournal");

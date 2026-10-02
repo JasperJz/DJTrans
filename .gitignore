@@ -3,3 +3,7 @@ obj/
 *.user
 .vs/
 TestResults/
+.testout/
+build-fd/
+build-selfcontained/
+build/

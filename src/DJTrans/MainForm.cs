@@ -12,6 +12,7 @@ public sealed class MainForm : Form
     private readonly VolumeWatcher _watcher;
     private readonly TransferEngine _engine;
     private readonly ThumbnailService _thumbs;
+    private readonly SemaphoreSlim _logLock = new(1, 1);
     private readonly ToolStrip _toolbar;
     private readonly ListBox _deviceList;
     private readonly StatusStrip _status;
@@ -48,11 +49,13 @@ public sealed class MainForm : Form
             System.Diagnostics.Debug.WriteLine(m);
             try
             {
+                _logLock.Wait();
                 var logPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DJTrans", "engine.log");
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)!);
                 File.AppendAllText(logPath, m + Environment.NewLine);
             }
             catch { }
+            finally { _logLock.Release(); }
         };
 
         // ---------- 工具栏 ----------

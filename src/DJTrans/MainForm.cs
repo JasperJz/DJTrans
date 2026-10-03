@@ -35,7 +35,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "DJTrans — DJI 相机素材传输";
+        Text = $"DJTrans — DJI 相机素材传输 v{Version}";
         Font = new Font("Segoe UI", 9F);
         ClientSize = new Size(1280, 800);
         MinimumSize = new Size(960, 600);
@@ -117,7 +117,15 @@ public sealed class MainForm : Form
         // ---------- 网格 / Dock / 状态 ----------
         _grid.SelectionChanged += UpdateStatus;
         _grid.VisibleRangeChanged += () => _grid.RequestVisibleThumbnails(_thumbs);
-        _grid.ItemActivated += item => System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{item.Path}\"");
+        // 双击/回车：用系统默认应用打开（照片→看图工具，视频→默认播放器）
+        _grid.ItemActivated += item =>
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(item.Path) { UseShellExecute = true }); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "无法打开文件：" + ex.Message, "DJTrans", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        };
 
         _dock.PauseAllRequested += () => _engine.PauseAll();
         _dock.ResumeAllRequested += () => _engine.ResumeAll();
@@ -172,6 +180,8 @@ public sealed class MainForm : Form
         if (m.Msg == WM_DEVICECHANGE) _watcher.NotifyDeviceChange();
         base.WndProc(ref m);
     }
+
+    private static string Version => typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     private void EnableDarkTitle()
     {

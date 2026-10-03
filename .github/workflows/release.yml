@@ -1,0 +1,38 @@
+name: release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test
+        run: dotnet test tests/DJTrans.Core.Tests -c Release
+
+      - name: Publish (self-contained, no runtime needed)
+        run: dotnet publish src/DJTrans -c Release -o publish-sc -p:PublishSingleFile=true -p:SelfContained=true -p:EnableCompressionInSingleFile=true -p:DebugType=none
+      - name: Publish (framework-dependent, needs .NET 10 Desktop Runtime)
+        run: dotnet publish src/DJTrans -c Release -o publish-fd -p:PublishSingleFile=true -p:SelfContained=false -p:DebugType=none
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path publish-sc/* -DestinationPath dist/DJTrans-${{ github.ref_name }}-win-x64-self-contained.zip
+          Compress-Archive -Path publish-fd/* -DestinationPath dist/DJTrans-${{ github.ref_name }}-win-x64-framework-dependent.zip
+          Get-ChildItem dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*.zip

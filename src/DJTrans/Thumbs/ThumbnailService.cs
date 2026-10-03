@@ -56,21 +56,6 @@ public sealed class ThumbnailService : IDisposable
         return Convert.ToHexString(System.IO.Hashing.XxHash3.Hash(System.Text.Encoding.UTF8.GetBytes(raw)));
     }
 
-    /// <summary>同步取内存缓存（网格绘制路径调用，绝不做 IO）。</summary>
-    public Image? TryGetMemory(string key)
-    {
-        lock (_memLock)
-        {
-            if (_mem.TryGetValue(key, out var img))
-            {
-                _lru.Remove(key);
-                _lru.AddLast(key);
-                return img;
-            }
-            return null;
-        }
-    }
-
     public void Request(MediaItem item, int priority)
     {
         if (_disposed) return;
@@ -91,12 +76,6 @@ public sealed class ThumbnailService : IDisposable
         var r = new ThumbRequest(item, priority);
         if (priority <= 0) _hiQ.Enqueue(r); else _loQ.Enqueue(r);
         _wake.Set();
-    }
-
-    /// <summary>可视区变化后调用：淘汰在途的低优先请求引用（轻量 epoch 机制）。</summary>
-    public void RequeueVisible(IReadOnlyList<MediaItem> visible)
-    {
-        foreach (var m in visible) Request(m, 0);
     }
 
     private void WorkerLoop()

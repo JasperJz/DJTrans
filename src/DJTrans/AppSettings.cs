@@ -12,7 +12,6 @@ public sealed class AppSettings
     public bool Verify { get; set; } = true;
     public int Workers { get; set; } = 2;
     public bool IncludeProxy { get; set; }
-    public string? WindowBounds { get; set; }
 
     private static string PathFor() => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DJTrans", "settings.json");

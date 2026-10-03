@@ -89,7 +89,19 @@ tests/DJTrans.Core.Tests/  xunit：引擎/续传/冲突/校验/扫描/DNG/名称
 - **C2 完整工具与 UI 美化（下一周期）**：
   - UI 美化与优化（用户明确要求的后续方向）：深色主题全局化、工具栏图标化与分组、网格间距/圆角/悬停动效、Dock 虚拟模式（万级作业）、设置界面、失败清单聚合+一键重试、按日分组视图、LRF/SRT 开关入设置
   - 其余：AC-13 基准协议、物理拔插用户自测项、上传方向续传
-- **C3 加固与性能**：10k 基准、崩溃恢复演练、最终集成验收、发布打包检查。
+- **C3 云备份与同步（用户路线图，2026-10-03 立项待细化）**：
+  - 架构：为 TransferEngine 引入 IStorageProvider 接缝（openRead/openWrite/length/mtime/partialRead），本地盘为默认实现；云目标 = 另一种 Provider
+  - OneDrive（先行）：Microsoft Graph API，OAuth 设备码流程（免嵌浏览器），**大文件可续传 Upload Session（5-10MB 分块）与现有 8MB journal 模型天然对齐**；凭据存 Windows 凭据管理器（DPAPI），不入明文 JSON
+  - Google Drive：OAuth + resumable media upload（同样分块可续传）
+  - 自建云：WebDAV（覆盖 Nextcloud/群晖/坚果云）+ S3 兼容（MinIO/OSS/B2）
+  - 增量去重延伸：OneDrive/Drive/S3/WebDAV 均支持 Range GET → SmartSkip 的首尾块指纹比对可直用云端
+  - 范围建议：第一版只做单向"备份"（新媒体上传+校验+跳过已备份），双向同步（含删除镜像）风险高暂不做
+  - 阻断级前置：C4 无线无关；需要 Azure AD 公共客户端应用注册（免费，用户提供租户）
+- **C4 无线传输研究（用户路线图，先调研后立项）**：
+  - 蓝牙：**不可行**——DJI 相机 BT 仅用于遥控配对，不暴露文件传输剖面，带宽也不够（~2Mbps）
+  - 相机 WiFi 直连：DJI Action/Pocket 的 WiFi 仅对官方 Mimo App 开放，协议私有；PC 端需逆向（社区有零星尝试，无生产可用方案）。立项前先做 1-2 天调研 spike：a) 搜集现有逆向项目（GitHub "dji mimo protocol/reverse"）；b) 抓包 Mimo 与相机的 TCP 会话评估协议复杂度与法务/ToS 风险；c) 实测 WiFi 速率上限（预期仅 2-10 MB/s，可能得不偿失）
+  - 低成本替代路线（可在 C3 顺带落地）："手机中转"——Mimo 自动同步到手机 → 手机相册经 OneDrive/局域网同步到 PC 的一个"入库文件夹" → DJTrans 支持把任意本地文件夹（含固定入库文件夹）当作扫描源，自动入库+去重。工程量小、今天就可用（现版本已能把导出目标指到 OneDrive 同步文件夹，但有 .djpart/.djjournal 被同步上传的污染问题，正式方案需把 journal 移出同步目录或加排除规则）
+- **C5 加固与性能**：10k 基准、崩溃恢复演练、最终集成验收、发布打包检查。
 
 依赖：C1 Core 是 C2/C3 前置；关键路径 TransferEngine→队列 UI→真机验收。
 

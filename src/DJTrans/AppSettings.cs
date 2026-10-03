@@ -10,6 +10,7 @@ public sealed class AppSettings
     public LayoutMode Layout { get; set; } = LayoutMode.Mirror;
     public ConflictPolicy Conflict { get; set; } = ConflictPolicy.SmartSkip;
     public bool Verify { get; set; } = true;
+    public bool StrictSkipVerification { get; set; }
     public int Workers { get; set; } = 2;
     public bool IncludeProxy { get; set; }
 

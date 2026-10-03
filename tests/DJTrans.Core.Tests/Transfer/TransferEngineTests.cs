@@ -76,6 +76,92 @@ public sealed class TransferEngineTests : IDisposable
     private static byte[] HashFile(string p) => XxHash3.Hash(File.ReadAllBytes(p));
 
     [Fact]
+    public void FailedOverwrite_PreservesExistingDestination()
+    {
+        var src = MakeSource("preserve.jpg", 12345);
+        var req = Req(src) with { SizeBytes = 12346 };
+        byte[] original = [1, 2, 3, 4];
+        File.WriteAllBytes(req.DestPath, original);
+        using var eng = new TransferEngine(workers: 1);
+        eng.EnqueueBatch([req], new TransferOptions { ConflictPolicy = ConflictPolicy.Overwrite });
+        Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
+        Assert.Equal(JobState.Failed, eng.Snapshot().Jobs.Single().State);
+        Assert.Equal(original, File.ReadAllBytes(req.DestPath));
+    }
+
+    [Fact]
+    public void LateDestinationConflict_DoesNotOverwriteUnapprovedFile()
+    {
+        var src = MakeSource("race.mp4", 64L * 1024 * 1024);
+        var req = Req(src);
+        using var eng = new TransferEngine(workers: 1);
+        eng.EnqueueBatch([req], new TransferOptions());
+        Assert.True(WaitUntil(() => File.Exists(req.DestPath + ".djpart")));
+        byte[] original = [9, 8, 7];
+        File.WriteAllBytes(req.DestPath, original);
+        Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
+        Assert.Contains(eng.Snapshot().Jobs.Single().State, new[] { JobState.Failed, JobState.Skipped });
+        Assert.Equal(original, File.ReadAllBytes(req.DestPath));
+    }
+
+    [Fact]
+    public void StrictSkip_DetectsChangedMiddle_WhileQuickFingerprintMatches()
+    {
+        var src = MakeSource("middle.mp4", 20L * 1024 * 1024);
+        var req = Req(src);
+        File.Copy(src, req.DestPath);
+        using (var target = new FileStream(req.DestPath, FileMode.Open, FileAccess.ReadWrite))
+        {
+            target.Position = 10L * 1024 * 1024;
+            int original = target.ReadByte();
+            target.Position--;
+            target.WriteByte((byte)(original ^ 0xff));
+        }
+        Assert.True(TransferJournal.QuickFingerprintEqual(src, req.DestPath, req.SizeBytes));
+        Assert.False(TransferJournal.FullContentEqual(src, req.DestPath, req.SizeBytes));
+        using var eng = new TransferEngine(workers: 1);
+        bool asked = false;
+        eng.SetConflictResolver(_ => { asked = true; return ConflictDecision.Skip; });
+        eng.EnqueueBatch([req], new TransferOptions { StrictSkipVerification = true });
+        Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
+        Assert.True(asked);
+        Assert.DoesNotContain("全量内容比对一致", eng.Snapshot().Jobs.Single().SkipReason ?? "");
+    }
+
+    [Fact]
+    public void StrictSkip_IdenticalFile_RecordsFullComparison()
+    {
+        var src = MakeSource("identical.jpg", 12345);
+        var req = Req(src);
+        File.Copy(src, req.DestPath);
+        using var eng = new TransferEngine(workers: 1);
+        eng.EnqueueBatch([req], new TransferOptions { StrictSkipVerification = true });
+        Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
+        Assert.Equal(JobState.Skipped, eng.Snapshot().Jobs.Single().State);
+        Assert.Equal("全量内容比对一致，跳过", eng.Snapshot().Jobs.Single().SkipReason);
+    }
+
+    [Fact]
+    public void CompletedShortFinalBlockJournal_ResumesAtEnd_AndVerifies()
+    {
+        var src = MakeSource("tail.mp4", TransferJournal.BlockSize + 12345L);
+        var req = Req(src);
+        File.Copy(src, req.DestPath + ".djpart");
+        var journal = TransferJournal.Create(req);
+        var data = File.ReadAllBytes(src);
+        journal.RecordBlock(XxHash3.HashToUInt64(data.AsSpan(0, TransferJournal.BlockSize)), TransferJournal.BlockSize);
+        journal.RecordBlock(XxHash3.HashToUInt64(data.AsSpan(TransferJournal.BlockSize)), 12345);
+        journal.Save();
+        Assert.NotNull(TransferJournal.TryLoad(req));
+        using var eng = new TransferEngine(workers: 1);
+        eng.EnqueueBatch([req], new TransferOptions());
+        Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
+        Assert.Equal(JobState.Done, eng.Snapshot().Jobs.Single().State);
+        Assert.Equal(req.SizeBytes, eng.Snapshot().Jobs.Single().ResumedFromOffset);
+        Assert.Equal(HashFile(src), HashFile(req.DestPath));
+    }
+
+    [Fact]
     public void SmallFile_CopiesAndVerifies_WithMtimePreserved()
     {
         using var eng = new TransferEngine(workers: 1);
@@ -203,7 +289,7 @@ public sealed class TransferEngineTests : IDisposable
         Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
         var job = eng.Snapshot().Jobs.Single();
         Assert.Equal(JobState.Skipped, job.State);
-        Assert.Contains("增量跳过", job.SkipReason);
+        Assert.Contains("未全量比对", job.SkipReason);
     }
 
     [Fact]

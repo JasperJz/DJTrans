@@ -45,6 +45,7 @@ public sealed record TransferOptions
     public ConflictPolicy ConflictPolicy { get; init; } = ConflictPolicy.SmartSkip;
     public VerifyMode Verify { get; init; } = VerifyMode.BlockHash;
     public bool PreserveModifiedTime { get; init; } = true;
+    public bool StrictSkipVerification { get; init; }
 }
 
 public sealed record TransferRequest
@@ -75,6 +76,7 @@ public sealed record JobSnapshot
     public double SpeedBytesPerSec { get; init; }
     public string? Error { get; init; }
     public string? SkipReason { get; init; }
+    public string? CompletionNote { get; init; }
     public long ResumedFromOffset { get; init; }
     public DateTime? StartedUtc { get; init; }
     public DateTime? FinishedUtc { get; init; }

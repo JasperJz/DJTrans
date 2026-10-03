@@ -1,0 +1,31 @@
+name: 问题报告
+description: 报告错误、恢复失败或数据完整性问题
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "请勿上传真实媒体、完整路径、journal 或凭据。安全问题请先阅读 SECURITY.md。"
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: DJTrans 版本、Windows 版本、设备型号、文件系统
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 优先使用临时目录与合成文件
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏错误信息或截图

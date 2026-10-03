@@ -21,3 +21,14 @@ TestResults/
 *.log
 .testout/
 .testout*/
+
+# 本地发布、传输现场与凭据
+out/
+*.djpart
+*.djjournal
+*.djjournal.tmp
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12

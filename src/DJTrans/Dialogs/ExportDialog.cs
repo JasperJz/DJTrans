@@ -10,6 +10,7 @@ public sealed class ExportDialog : Form
     private readonly ComboBox _layout;
     private readonly ComboBox _conflict;
     private readonly CheckBox _verify;
+    private readonly CheckBox _strictSkip;
     private readonly Label _space;
     private readonly Button _ok;
     private readonly Button _cancel;
@@ -19,6 +20,7 @@ public sealed class ExportDialog : Form
     public LayoutMode DestLayout { get; private set; } = LayoutMode.Mirror;
     public ConflictPolicy Conflict { get; private set; } = ConflictPolicy.SmartSkip;
     public bool Verify => _verify.Checked;
+    public bool StrictSkipVerification => _strictSkip.Checked;
 
     public ExportDialog(IReadOnlyList<Core.Scan.MediaItem> selected, string lastDir)
     {
@@ -27,7 +29,7 @@ public sealed class ExportDialog : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(560, 300);
+        ClientSize = new Size(620, 320);
         Font = new Font("Segoe UI", 9F);
 
         long bytes = selected.Sum(i => i.SizeBytes);
@@ -52,16 +54,17 @@ public sealed class ExportDialog : Form
 
         var l3 = new Label { Text = "同名冲突:", Location = new Point(14, 114), AutoSize = true };
         _conflict = new ComboBox { Location = new Point(90, 110), Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
-        _conflict.Items.Add("智能跳过（内容相同自动跳过，不同时询问）");
+        _conflict.Items.Add("智能跳过（大小与首尾指纹匹配时跳过）");
         _conflict.Items.Add("总是询问");
         _conflict.Items.Add("覆盖");
         _conflict.Items.Add("跳过");
         _conflict.Items.Add("保留两者（新文件自动改名）");
         _conflict.SelectedIndex = 0;
 
-        _verify = new CheckBox { Text = "完成后校验（XxHash3 分块校验，保证内容一致）", Location = new Point(14, 146), AutoSize = true, Checked = true };
+        _verify = new CheckBox { Text = "写后读回校验（XxHash3 分块比对）", Location = new Point(14, 146), AutoSize = true, Checked = true };
 
-        _space = new Label { Location = new Point(14, 174), AutoSize = true, ForeColor = Color.FromArgb(90, 90, 90) };
+        _strictSkip = new CheckBox { Text = "严格跳过：逐字节比对整个已有文件（较慢）", Location = new Point(14, 174), AutoSize = true };
+        _space = new Label { Location = new Point(14, 202), AutoSize = true, ForeColor = Color.FromArgb(90, 90, 90) };
         Action upd = () =>
         {
             try
@@ -86,8 +89,8 @@ public sealed class ExportDialog : Form
         _dir.TextChanged += (_, _) => upd();
         upd();
 
-        _ok = new Button { Text = "开始导出", DialogResult = DialogResult.OK, Location = new Point(350, 224), Width = 100 };
-        _cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(456, 224), Width = 90 };
+        _ok = new Button { Text = "开始导出", DialogResult = DialogResult.OK, Location = new Point(350, 252), Width = 100 };
+        _cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(456, 252), Width = 90 };
         _ok.Click += (_, _) =>
         {
             if (string.IsNullOrWhiteSpace(_dir.Text) || !Directory.Exists(_dir.Text))
@@ -110,7 +113,7 @@ public sealed class ExportDialog : Form
         AcceptButton = _ok;
         CancelButton = _cancel;
 
-        Controls.AddRange([label0, l1, _dir, browse, l2, _layout, l3, _conflict, _verify, _space, _ok, _cancel]);
+        Controls.AddRange([label0, l1, _dir, browse, l2, _layout, l3, _conflict, _verify, _strictSkip, _space, _ok, _cancel]);
     }
 
     public void Preset(AppSettings s)
@@ -125,6 +128,7 @@ public sealed class ExportDialog : Form
             _ => 0,
         };
         _verify.Checked = s.Verify;
+        _strictSkip.Checked = s.StrictSkipVerification;
     }
 }
 

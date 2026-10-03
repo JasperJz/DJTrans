@@ -148,7 +148,7 @@ public sealed class TransferDock : UserControl
                 JobState.WaitingDevice => Color.DarkOrange,
                 _ => SystemColors.WindowText,
             };
-            string note = j.Error ?? j.SkipReason ?? (j.ResumedFromOffset > 0 ? $"断点续传自 {ThumbGrid.FmtBytes(j.ResumedFromOffset)}" : "");
+            string note = j.Error ?? j.SkipReason ?? j.CompletionNote ?? (j.ResumedFromOffset > 0 ? $"断点续传自 {ThumbGrid.FmtBytes(j.ResumedFromOffset)}" : "");
             int row = _grid.Rows.Add(
                 j.Name,
                 j.Direction == TransferDirection.Download ? "相机→电脑" : "电脑→相机",

@@ -288,6 +288,8 @@ public sealed class TransferEngine : IDisposable
                     SpeedBytesPerSec = j.EmaSpeed,
                     Error = j.Error,
                     SkipReason = j.SkipReason,
+                    CompletionNote = j.State == JobState.Done
+                        ? (j.Options.Verify == VerifyMode.BlockHash ? "写后全量分块校验通过" : "仅大小校验通过") : null,
                     ResumedFromOffset = j.ResumedFromOffset,
                     StartedUtc = j.StartedUtc,
                     FinishedUtc = j.FinishedUtc,
@@ -450,11 +452,19 @@ public sealed class TransferEngine : IDisposable
             var policy = job.Options.ConflictPolicy;            // 智能跳过：目标同名同大小且首尾块指纹一致 → 静默跳过（增量导出，不打扰用户）
             if (policy == ConflictPolicy.SmartSkip
                 && req.SizeBytes == GetFileLength(dest)
-                && TransferJournal.QuickFingerprintEqual(req.SourcePath, dest, req.SizeBytes, req.SourceMtimeUtc))
+                && (job.Options.StrictSkipVerification
+                    ? TransferJournal.FullContentEqual(req.SourcePath, dest, req.SizeBytes, () =>
+                    {
+                        job.PauseGate.Wait(_cts.Token);
+                        _globalPause.Wait(_cts.Token);
+                        if (job.CancelRequested) throw JobCanceledException.Instance;
+                    })
+                    : TransferJournal.QuickFingerprintEqual(req.SourcePath, dest, req.SizeBytes, req.SourceMtimeUtc)))
             {
                 TransferJournal.DeleteFiles(dest);
                 job.State = JobState.Skipped;
-                job.SkipReason = "目标已存在相同内容（增量跳过）";
+                job.SkipReason = job.Options.StrictSkipVerification
+                    ? "全量内容比对一致，跳过" : "大小与首尾指纹匹配，跳过（未全量比对）";
                 Interlocked.Exchange(ref job.BytesDone, req.SizeBytes);
                 job.FinishedUtc = DateTime.UtcNow;
                 Log($"#{job.Id} 增量跳过：{Path.GetFileName(dest)}");
@@ -562,7 +572,7 @@ public sealed class TransferEngine : IDisposable
             var buf = new byte[1024 * 1024];
             var blockHash = new XxHash3();
             long blockBytes = startOffset % TransferJournal.BlockSize;
-            if (blockBytes != 0)
+            if (blockBytes != 0 && startOffset != actualSize)
                 throw new IOException("续传偏移未按块对齐，需要整文件重传（内部一致性错误）");
             long copied = startOffset;
             while (copied < actualSize)
@@ -607,7 +617,7 @@ public sealed class TransferEngine : IDisposable
         }
 
         // ---------- 收尾 ----------
-        File.Move(part, dest, overwrite: overwrite || File.Exists(dest));
+        File.Move(part, dest, overwrite: overwrite);
         if (job.Options.PreserveModifiedTime)
             File.SetLastWriteTimeUtc(dest, req.SourceMtimeUtc);
         TransferJournal.DeleteJournalFile(dest + ".djjournal");

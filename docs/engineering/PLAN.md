@@ -1,14 +1,14 @@
 # DJTrans — DJI 相机素材传输工具（Windows）工程计划
 
-状态：v2（R0 评审已并入）· 日期：2026-10-03 · 负责人：主 Agent（ZCode）
+状态：v2（R0 评审已并入）· 日期：2026-10-03 · 维护：DJTrans Contributors
 
 ## 0. 结论摘要（调研已定事实 + 开源调研留痕）
 
-- 【事实·DJI官方】DJI Action/Pocket 全系 USB 连 PC 时为 **USB Mass Storage（盘符，exFAT）**，不是 MTP；官方无 Windows 导出工具（Mimo 仅手机端）。→ 不需要 WPD/MTP 栈；MTP 列为未来扩展（架构留缝，不做实现）。
+- 【事实·DJI官方】当前实测 Action 通过 USB Mass Storage 暴露盘符；Pocket 与其他型号需逐型号验证，不能由单机验收推断全系。→ 不需要 WPD/MTP 栈；MTP 列为未来扩展（架构留缝，不做实现）。
 - 【事实·真机 Action】`E:`(OsmoAction) `DCIM\DJI_001\`，命名 `DJI_YYYYMMDDHHMMSS_NNNN_X.{MP4,LRF,JPG}`；【假设·待验证】Pocket 系列命名类似——NameParser 解析失败一律回退文件 mtime，条目绝不丢弃（配单测）。
 - 【事实·环境】无 Rust/MSVC；有 .NET 10 SDK + WindowsDesktop Runtime 10.0.12 + Node24。
 - 【选型】**C# / .NET 10 / WinForms**，框架依赖单文件 exe（目标 ≤10MB）；自包含 ≤90MB 作为对外分发默认形态（README 说明取舍）。
-- 【开源调研留痕（满足"先看 GitHub"要求）】结论：无可整体复用项，借鉴设计——**FastCopy** 的"写后读回校验(XxHash)+按指纹跳过"语义；**Ultracopier** 的引擎/UI 分离队列状态机与冲突对话框；**digiKam import** 的"缩略图网格+勾选+底部队列"交互；**Rapid Photo Downloader** 的设备插入为中心 UX。Rust MTP 生态（winmtp/mtp-rs）因 DJI=UMS 而不需要。来源清单见调研记录（会话 R0）。
+- 【开源调研留痕（满足"先看 GitHub"要求）】结论：无可整体复用项，借鉴设计——**FastCopy** 的"写后读回校验(XxHash)+按指纹跳过"语义；**Ultracopier** 的引擎/UI 分离队列状态机与冲突对话框；**digiKam import** 的"缩略图网格+勾选+底部队列"交互；**Rapid Photo Downloader** 的设备插入为中心 UX。Rust MTP 生态（winmtp/mtp-rs）因 DJI=UMS 而不需要。原调研缺少可独立查阅的来源清单，结论仅作为设计参考，待补证。
 
 ## 1. 需求定义
 
@@ -86,22 +86,16 @@ tests/DJTrans.Core.Tests/  xunit：引擎/续传/冲突/校验/扫描/DNG/名称
 
 - **C1（已完成）核心闭环**：脚手架 → Core(Scan/Transfer/Journal/SpaceGuard/Retry) + 主 UI(设备栏/网格/选择/导出对话框/队列表) + LRF 排除硬编码 + 测试 + 真机验收 AC-01~07、08a、09、12、15、16。
   - C1 增补（v0.9.0 基线，用户反馈驱动）：上传(AC-10)、删除(AC-11)、安全弹出(AC-17)、双击/回车用系统默认应用预览（照片→看图/视频→播放器）、GitHub 开源化（MIT LICENSE、CI build、tag 触发 Release 打包双 zip、README 公众化）、版本号入标题栏。
-- **C2 完整工具与 UI 美化（下一周期）**：
-  - UI 美化与优化（用户明确要求的后续方向）：深色主题全局化、工具栏图标化与分组、网格间距/圆角/悬停动效、Dock 虚拟模式（万级作业）、设置界面、失败清单聚合+一键重试、按日分组视图、LRF/SRT 开关入设置
-  - 其余：AC-13 基准协议、物理拔插用户自测项、上传方向续传
-- **C3 云备份与同步（用户路线图，2026-10-03 立项待细化）**：
-  - 架构：为 TransferEngine 引入 IStorageProvider 接缝（openRead/openWrite/length/mtime/partialRead），本地盘为默认实现；云目标 = 另一种 Provider
-  - OneDrive（先行）：Microsoft Graph API，OAuth 设备码流程（免嵌浏览器），**大文件可续传 Upload Session（5-10MB 分块）与现有 8MB journal 模型天然对齐**；凭据存 Windows 凭据管理器（DPAPI），不入明文 JSON
-  - Google Drive：OAuth + resumable media upload（同样分块可续传）
-  - 自建云：WebDAV（覆盖 Nextcloud/群晖/坚果云）+ S3 兼容（MinIO/OSS/B2）
-  - 增量去重延伸：OneDrive/Drive/S3/WebDAV 均支持 Range GET → SmartSkip 的首尾块指纹比对可直用云端
-  - 范围建议：第一版只做单向"备份"（新媒体上传+校验+跳过已备份），双向同步（含删除镜像）风险高暂不做
-  - 阻断级前置：C4 无线无关；需要 Azure AD 公共客户端应用注册（免费，用户提供租户）
-- **C4 无线传输研究（用户路线图，先调研后立项）**：
-  - 蓝牙：**不可行**——DJI 相机 BT 仅用于遥控配对，不暴露文件传输剖面，带宽也不够（~2Mbps）
-  - 相机 WiFi 直连：DJI Action/Pocket 的 WiFi 仅对官方 Mimo App 开放，协议私有；PC 端需逆向（社区有零星尝试，无生产可用方案）。立项前先做 1-2 天调研 spike：a) 搜集现有逆向项目（GitHub "dji mimo protocol/reverse"）；b) 抓包 Mimo 与相机的 TCP 会话评估协议复杂度与法务/ToS 风险；c) 实测 WiFi 速率上限（预期仅 2-10 MB/s，可能得不偿失）
-  - 低成本替代路线（可在 C3 顺带落地）："手机中转"——Mimo 自动同步到手机 → 手机相册经 OneDrive/局域网同步到 PC 的一个"入库文件夹" → DJTrans 支持把任意本地文件夹（含固定入库文件夹）当作扫描源，自动入库+去重。工程量小、今天就可用（现版本已能把导出目标指到 OneDrive 同步文件夹，但有 .djpart/.djjournal 被同步上传的污染问题，正式方案需把 journal 移出同步目录或加排除规则）
-- **C5 加固与性能**：10k 基准、崩溃恢复演练、最终集成验收、发布打包检查。
+- **C2 可靠性收尾（v0.9.x，先于云备份）**：物理拔盘/重插、目标空间耗尽、校验阶段崩溃、同盘符换卡、上传续传、恢复末块与覆盖失败演练；正式吞吐、内存、句柄与 10k 条目基准。真机只操作自建测试文件。
+  - 系统级安全弹出需独立实现与验收：设备忙、非管理员、多卷读卡器、传输中点击、设备移除结果。当前按钮仅为卸载卷，不标记 AC-17 已完成。
+  - 快速跳过与全量比对分别显示；未来已备份徽标与删除建议必须基于明确的校验依据，不能以首尾指纹当作全量验证。
+- **C3 日常体验（v1.0）**：失败清单+一键重试、重启后的恢复入口、已导出状态、磁盘缓存配额/清理、Dock 万级虚拟队列、按日分组、设置界面、键盘/高 DPI 验收、深色主题。脱敏真实 UI 截图在界面验收后添加，不用概念图冒充运行截图。
+- **C4 单向备份扩展**：先普通文件夹作为扫描源，再本地暂存校验后交付同步目录，避免 .djpart/.djjournal 被云同步。仅完成文件交付；跨卷搬运需复制与校验后再提交。
+  - 第一版只接一种云服务，不做双向同步与删除镜像。存储接口按能力区分顺序写入、Range 读取、上传会话、服务端确认、提交与冲突，不假设云端与 FileStream 语义一致。
+  - OneDrive 上传块须按 320KiB 倍数组织（例如 10MiB），不能直接复用现有 8MiB 校验块。恢复查询服务端 nextExpectedRanges，并处理会话过期、限流、配额与令牌撤销。官方依据：https://learn.microsoft.com/en-us/graph/api/driveitem-createuploadsession?view=graph-rest-1.0 。
+  - 凭据使用 Windows 安全存储；DPAPI 加密与凭据管理器是不同选择，不存明文 JSON。验证个人/组织账号授权流程；设备码登录不是所有租户均可用。
+  - Range GET、哈希与增量策略逐 Provider 验证，不承诺所有服务通用。接入网络后同步更新 README 的无联网声明。
+- **C5 无线限时调研**：限定 1–2 天验证具体型号、公开协议与可复现吞吐；没有可靠实现路径则停止，保留手机中转到本地入库目录路线。不把未核实的蓝牙能力、私有协议或估计速率写成事实。
 
 依赖：C1 Core 是 C2/C3 前置；关键路径 TransferEngine→队列 UI→真机验收。
 
@@ -124,7 +118,7 @@ tests/DJTrans.Core.Tests/  xunit：引擎/续传/冲突/校验/扫描/DNG/名称
 
 ## 7. 验证入口
 
-- 构建：`dotnet build D:\Projects\DJTrans\DJTrans.slnx -c Release`
+- 构建：`dotnet build DJTrans.slnx -c Release`
 - 测试：`dotnet test tests/DJTrans.Core.Tests`
 - 运行：`dotnet run --project src/DJTrans -c Release`
 - 真机：E:(OsmoAction) / F:(读卡器)；导出目标用临时目录；上传/删除仅 `__DJTRANS_TEST__*`
@@ -153,7 +147,7 @@ tests/DJTrans.Core.Tests/  xunit：引擎/续传/冲突/校验/扫描/DNG/名称
 | AC-03 目录加载 | **已验收** | E: 75 文件扫描 0.0s，状态栏"扫描完成：75 项（0.0s）"；流式索引 |
 | AC-04 快照网格 | **已验收** | 视觉确认真实照片/视频帧缩略图 + MP4 角标；磁盘缓存 51 条命中 |
 | AC-05 多选/反选 | **已验收** | 全选 51 项(8.3GB) → 反选 0 → 反选 51（UIA 状态断言）；筛选"仅照片"27 项选择 |
-| AC-06 导出 | **已验收** | 27 照片+24 视频(8.2GB) 全部完成；65-70 MB/s；逐项/总进度/速度/ETA；SHA256 27/27+24/24 全对；mtime 保留；空间预检"目标盘 D:\ 可用 668.8GB"实时更新 |
+| AC-06 导出 | **已验收** | 27 照片+24 视频(8.2GB) 全部完成；65-70 MB/s；逐项/总进度/速度/ETA；SHA256 27/27+24/24 全对；mtime 保留；空间预检"目标盘剩余空间"实时更新 |
 | AC-07 进程内续传 | **已验收** | 全部暂停后 4 秒字节零增长（2.4GB/8.4GB 冻结）；继续后完成 |
 | AC-08a 跨重启(单测) | **已验收** | ResumeFromValidJournal/TornJournal/CorruptedPart/QueueDedupes 等 50/50 绿 |
 | AC-08b 跨重启(真机) | **已验收（提前至 C1）** | 传输中 taskkill → journal 落盘(Offset=25165824,3 块哈希) → 重启重导出 → 日志"断点续传：从 2256MB 继续（共 2444MB）"与"从 24MB 继续"精确匹配；最终 SHA256 一致 |
@@ -165,6 +159,33 @@ tests/DJTrans.Core.Tests/  xunit：引擎/续传/冲突/校验/扫描/DNG/名称
 | AC-14 体积 | **已验收** | 框架依赖单文件 **0.34MB**；自包含压缩单文件 **49.3MB**；单文件 exe 启动冒烟通过 |
 | AC-15 代理/字幕 | **已验收** | 75 文件 - 24 LRF = 51 项媒体，默认排除；工具栏开关就位 |
 | AC-16 增量去重 | **已验收** | 同批二次导出 27 项 0.03s 全部"增量跳过"零弹窗（期间发现并发日志写丢失，已修复加锁） |
-| AC-17 安全弹出 | **已实现待用户自测** | FSCTL 锁卷+卸载实现就绪；真机执行需用户在场（弹出后需物理重插） |
+| AC-17 安全弹出 | **未完成：仅卷卸载** | 当前仅 FSCTL 锁卷+卸载；不等于系统级弹出，已纠正 UI 提示。设备弹出实现与真机验收待完成 |
 
 遗留待办（C2/C3）：AC-01/12 物理拔插用户自测项；AC-13 基准协议；设置界面；失败清单聚合；10k 条目压力；AC-08b 上传方向续传。
+
+
+### 2026-10-03 开源审查与可靠性补强（本机工作区）
+
+- 忽略 out/、传输现场、环境凭据与签名私钥；保留源码、合成测试、AGENTS.md 和统一 PLAN.md。
+- 新增贡献指南、安全报告说明、Bug/功能/PR 模板、依赖更新配置；公开文档移除全系支持、绝对正确性及自动安全弹出的承诺。
+- 增加严格跳过（全文件逐字节比对，支持暂停/取消）；快速跳过说明未全量比对；消除冲突检查后出现目标文件时的隐式覆盖。
+- Actions 固定提交 SHA、限制权限、发布标签核对版本、显式 win-x64、附 SHA256 清单。
+- 路线图优先完成故障与性能验收，再 UI 与单向云备份；云上传块与校验块分离。
+- 待专项验收：真机拔插/写满/系统级弹出、10k 性能、实际 UI 截图、云授权。未对用户媒体执行写入或删除。
+
+- 实际验证：Release 构建成功；60/60 单测通过（新增 5 项覆盖中间差异、严格跳过、短末块恢复、失败覆盖保留旧文件、后出现目标文件保护）；自包含与框架依赖 win-x64 单文件发布均成功；git diff --check 通过，忽略规则命中。
+- 另修复完整复制后短末块 journal 被拒绝及恢复末尾非整块偏移的问题。队列完成备注区分写后全量分块校验与仅大小校验。
+- 现有状态机测试保留 4 项 xUnit1031 同步等待警告；GitHub 托管 CI、设备移除及 UI 布局尚未现场验证。
+- 建议提交信息：fix: harden transfer integrity and prepare public contribution workflow。改动保留本机未提交状态，供 GitHub Desktop 查看；未推送与创建 Release。
+
+### 2026-10-03 README 叙述调整
+
+- 根据用户反馈，重写中英文开头：说明素材浏览、重复导出、中断恢复与复制后检查的动机，加入场景功能表与三步使用入口。
+- 保留功能与安全边界；技术与协作信息后置，修正 SHA256 清单表述为更新后的发布流程提供。
+- 仅文档变更，检查双语结构、链接与 git diff --check；未重复执行程序测试。
+
+### 2026-10-03 保留云端 README
+
+- 用户决定保留当前云端 README；已将 README.md 与 README_CN.md 恢复为 origin/main（f4a80295）版本，不纳入本次提交。此前 README 修改记录仅表示尝试，已撤回。
+- 其余源码、测试、忽略规则、协作文档与 CI 改动保留。准确的校验与卸载边界仍体现在 UI、SECURITY.md 和本计划中。
+- 验证：两份 README 与 origin/main 无差异；仅文档恢复，不重复运行程序测试。

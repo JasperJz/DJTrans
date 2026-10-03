@@ -90,13 +90,10 @@ public sealed class TransferJournal
             var j = JsonSerializer.Deserialize<TransferJournal>(body, JsonOpts);
             if (j is null) return null;
             if (!j.FingerprintMatches(req)) return null;
-            var blocksBytes = (long)j.BlockHashes.Count * BlockSize;
-            if (j.Offset < blocksBytes || j.Offset > blocksBytes + BlockSize || j.Offset > j.SourceSize) return null;
-            if (j.Offset != j.SourceSize && j.Offset != blocksBytes && j.BlockHashes.Count > 0)
-            {
-                // 只有末块允许部分写入，中间状态一律判为不一致
-                return null;
-            }
+            if (j.SourceSize < 0 || j.Offset < 0 || j.Offset > j.SourceSize || j.BlockHashes is null) return null;
+            long expectedBlocks = j.Offset / BlockSize + (j.Offset % BlockSize == 0 ? 0 : 1);
+            if (j.BlockHashes.Count != expectedBlocks) return null;
+            if (j.Offset != j.SourceSize && j.Offset % BlockSize != 0) return null;
             return j;
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException or NotSupportedException)
@@ -143,6 +140,25 @@ public sealed class TransferJournal
         {
             return false;
         }
+    }
+
+    public static bool FullContentEqual(string fileA, string fileB, long sizeHint, Action? checkpoint = null)
+    {
+        using var a = File.Open(fileA, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var b = File.Open(fileB, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (a.Length != b.Length || a.Length != sizeHint) return false;
+        var bufA = new byte[256 * 1024];
+        var bufB = new byte[bufA.Length];
+        long remaining = a.Length;
+        while (remaining > 0)
+        {
+            checkpoint?.Invoke();
+            int take = (int)Math.Min(bufA.Length, remaining);
+            if (!ReadExact(a, bufA, take) || !ReadExact(b, bufB, take)
+                || !bufA.AsSpan(0, take).SequenceEqual(bufB.AsSpan(0, take))) return false;
+            remaining -= take;
+        }
+        return true;
     }
 
     private static bool HashRangeEqual(FileStream a, FileStream b, long offset, int length)

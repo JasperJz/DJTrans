@@ -5,7 +5,7 @@ namespace DJTrans.Controls;
 
 /// <summary>
 /// 卷安全弹出：FSCTL_LOCK_VOLUME + FSCTL_DISMOUNT_VOLUME（刷新写入并卸载卷），
-/// 成功后 Windows 会弹出"可安全移除硬件"提示。失败 = 有句柄占用，如实上报。
+/// 卸载卷不等于系统级设备弹出；用户仍需通过 Windows 安全移除硬件。
 /// </summary>
 internal static class VolumeEjector
 {
@@ -35,6 +35,6 @@ internal static class VolumeEjector
             return "卷被占用（请关闭正在使用该设备的程序，如资源管理器/播放器）";
         if (!DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero))
             return "卸载卷失败（设备忙）";
-        return null; // 句柄关闭即解锁，卷保持卸载状态，系统判定可安全移除
+        return null;
     }
 }

@@ -87,7 +87,7 @@ public sealed class MainForm : Form
         _toolbar.Items.Add(new ToolStripButton("⬇ 导出所选…", null, (_, _) => ExportSelected()) { ToolTipText = "导出到电脑（相机 → PC）" });
         _toolbar.Items.Add(new ToolStripButton("⬆ 上传到设备…", null, (_, _) => UploadToDevice()));
         _toolbar.Items.Add(new ToolStripButton("🗑 删除设备文件…", null, (_, _) => DeleteSelected()));
-        _toolbar.Items.Add(new ToolStripButton("⏏ 安全弹出", null, (_, _) => EjectCurrent()));
+        _toolbar.Items.Add(new ToolStripButton("⏏ 卸载卷", null, (_, _) => EjectCurrent()));
 
         // ---------- 设备列表 ----------
         var left = new Panel { Dock = DockStyle.Left, Width = 220 };
@@ -322,6 +322,7 @@ public sealed class MainForm : Form
         _settings.Layout = dlg.DestLayout;
         _settings.Conflict = dlg.Conflict;
         _settings.Verify = dlg.Verify;
+        _settings.StrictSkipVerification = dlg.StrictSkipVerification;
         _settings.Save();
 
         var volume = _current;
@@ -340,6 +341,7 @@ public sealed class MainForm : Form
         {
             ConflictPolicy = dlg.Conflict,
             Verify = dlg.Verify ? VerifyMode.BlockHash : VerifyMode.SizeOnly,
+            StrictSkipVerification = dlg.StrictSkipVerification,
         });
         _dock.ToggleCollapse(true);
     }
@@ -452,8 +454,8 @@ public sealed class MainForm : Form
         var err = VolumeEjector.TryDismount(vol.Letter);
         if (err is null)
         {
-            _stDevice.Text = $"已安全卸载 {vol.DisplayName}，系统提示可移除后即可拔线";
-            MessageBox.Show(this, $"已卸载 {vol.DisplayName}。看到系统\"可安全移除硬件\"提示后即可拔线。", "DJTrans", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            _stDevice.Text = $"已卸载 {vol.DisplayName}；请通过 Windows 安全移除硬件";
+            MessageBox.Show(this, $"已卸载 {vol.DisplayName}。请继续通过 Windows 任务栏的“安全移除硬件”弹出设备，成功后再拔线。", "DJTrans", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         else
         {

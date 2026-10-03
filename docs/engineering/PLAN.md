@@ -189,3 +189,11 @@ tests/DJTrans.Core.Tests/  xunit：引擎/续传/冲突/校验/扫描/DNG/名称
 - 用户决定保留当前云端 README；已将 README.md 与 README_CN.md 恢复为 origin/main（f4a80295）版本，不纳入本次提交。此前 README 修改记录仅表示尝试，已撤回。
 - 其余源码、测试、忽略规则、协作文档与 CI 改动保留。准确的校验与卸载边界仍体现在 UI、SECURITY.md 和本计划中。
 - 验证：两份 README 与 origin/main 无差异；仅文档恢复，不重复运行程序测试。
+
+### 2026-10-03 依赖更新与分支清理
+
+- 用户授权整合更新、只保留 main。合入六个 Dependabot 分支：checkout 7.0.1、setup-dotnet 6.0.0、action-gh-release 3.0.3、Microsoft.NET.Test.Sdk 18.10.1、coverlet.collector 10.1.0、xunit.runner.visualstudio 4.0.0。
+- 修复 build.yml 中重复的 permissions 顶层键；保持 Action SHA 固定与最小权限。
+- 移除 Dependabot 配置，停止自动创建版本更新分支；未来依赖更新按需手动处理。README.md/README_CN.md 保持用户原版本。
+- 本机 Release 构建成功，测试 60/60 通过；原有 4 项 xUnit1031 警告保留。
+- 提交/推送后验证 GitHub CI，再清理已合并机器人分支；main 添加防强推与防删除保护，保留 GitHub Desktop 普通推送流程。

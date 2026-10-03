@@ -31,6 +31,8 @@ public sealed class TransferEngine : IDisposable
         public string CurrentDestPath;
         public readonly ManualResetEventSlim PauseGate = new(true);
         public volatile bool CancelRequested;
+        /// <summary>worker 是否持有本作业（锁内维护）。决定 Resume/Cancel 走唤醒还是直接状态迁移。</summary>
+        internal bool HeldByWorker;
         internal int Attempts;
         internal long LastSampleBytes;
         internal long LastSampleTicks;
@@ -121,13 +123,9 @@ public sealed class TransferEngine : IDisposable
         lock (_sync)
         {
             var j = _jobs.FirstOrDefault(x => x.Id == id);
-            if (j is null) return;
-            if (j.State is JobState.Queued or JobState.WaitingDevice) j.State = JobState.Paused;
-            else if (j.State is JobState.Transferring or JobState.Verifying or JobState.ResolvingConflict)
-            {
-                j.PauseGate.Reset();
-                j.State = JobState.Paused;
-            }
+            if (j is null || IsTerminal(j.State)) return;
+            j.PauseGate.Reset();
+            j.State = JobState.Paused; // 无论 worker 是否持有：held 时循环会在检查点停住；未持有则等待唤醒
         }
         _dirty = true;
     }
@@ -137,14 +135,10 @@ public sealed class TransferEngine : IDisposable
         lock (_sync)
         {
             var j = _jobs.FirstOrDefault(x => x.Id == id);
-            if (j is null) return;
-            if (j.State == JobState.Paused)
-            {
-                j.PauseGate.Set();
-                var wasActive = j.BytesDone > 0 || j.StartedUtc is not null;
-                j.State = wasActive ? JobState.Transferring : JobState.Queued;
-                if (!wasActive) _wake.Release();
-            }
+            if (j is null || j.State != JobState.Paused) return;
+            j.PauseGate.Set();
+            j.State = j.HeldByWorker ? JobState.Transferring : JobState.Queued;
+            if (!j.HeldByWorker) _wake.Release();
         }
         _dirty = true;
     }
@@ -156,7 +150,14 @@ public sealed class TransferEngine : IDisposable
             var j = _jobs.FirstOrDefault(x => x.Id == id);
             if (j is null || IsTerminal(j.State)) return;
             j.CancelRequested = true;
-            j.PauseGate.Set();
+            j.PauseGate.Set(); // 解除 worker 的暂停等待
+            if (!j.HeldByWorker)
+            {
+                // 无 worker 消费取消标志：直接迁移终态并释放目标锁（.djpart/journal 保留）
+                j.State = JobState.Canceled;
+                j.FinishedUtc = DateTime.UtcNow;
+                _busyDest.Remove(j.CurrentDestPath);
+            }
         }
         _dirty = true;
     }
@@ -169,6 +170,12 @@ public sealed class TransferEngine : IDisposable
             {
                 j.CancelRequested = true;
                 j.PauseGate.Set();
+                if (!j.HeldByWorker)
+                {
+                    j.State = JobState.Canceled;
+                    j.FinishedUtc = DateTime.UtcNow;
+                    _busyDest.Remove(j.CurrentDestPath);
+                }
             }
         }
         _dirty = true;
@@ -324,11 +331,16 @@ public sealed class TransferEngine : IDisposable
             lock (_sync)
             {
                 job = _jobs.FirstOrDefault(j => j.State == JobState.Queued);
-                if (job is not null) job.State = JobState.Transferring; // 占位，防其他 worker 重复领取
+                if (job is not null)
+                {
+                    job.State = JobState.Transferring; // 占位，防其他 worker 重复领取
+                    job.HeldByWorker = true;
+                }
             }
             if (job is null)
             {
-                _wake.Wait(500);
+                try { _wake.Wait(500); }
+                catch (ObjectDisposedException) { break; } // 退出竞态
                 continue;
             }
             try
@@ -337,23 +349,19 @@ public sealed class TransferEngine : IDisposable
             }
             catch (Exception ex)
             {
-                job.State = JobState.Failed;
+                lock (_sync) job.State = JobState.Failed;
                 job.Error = ex.Message;
                 job.FinishedUtc = DateTime.UtcNow;
             }
             finally
             {
-                ReleaseDest(job);
+                lock (_sync)
+                {
+                    job.HeldByWorker = false;
+                    if (IsTerminal(job.State)) _busyDest.Remove(job.CurrentDestPath);
+                }
                 _dirty = true;
             }
-        }
-    }
-
-    private void ReleaseDest(TransferJob job)
-    {
-        lock (_sync)
-        {
-            if (IsTerminal(job.State)) _busyDest.Remove(job.CurrentDestPath);
         }
     }
 
@@ -403,7 +411,7 @@ public sealed class TransferEngine : IDisposable
                 int delay = 400 << (job.Attempts - 1);
                 Log($"#{job.Id} IO 错误第 {job.Attempts} 次，{delay}ms 后重试：{ex.Message}");
                 Thread.Sleep(delay);
-                job.State = JobState.Transferring;
+                lock (_sync) if (job.State != JobState.Paused) job.State = JobState.Transferring; // 尊重暂停期间的状态
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -418,7 +426,6 @@ public sealed class TransferEngine : IDisposable
     private void RunOnce(TransferJob job)
     {
         var req = job.Req;
-        job.State = JobState.Transferring;
 
         // 设备在线检查（Download 源侧 / Upload 目标侧）
         if (!IsDevicePathOnline(req.DevicePath)) throw DeviceOfflineException.Instance;
@@ -443,7 +450,7 @@ public sealed class TransferEngine : IDisposable
             var policy = job.Options.ConflictPolicy;            // 智能跳过：目标同名同大小且首尾块指纹一致 → 静默跳过（增量导出，不打扰用户）
             if (policy == ConflictPolicy.SmartSkip
                 && req.SizeBytes == GetFileLength(dest)
-                && TransferJournal.QuickFingerprintEqual(req.SourcePath, dest, req.SizeBytes))
+                && TransferJournal.QuickFingerprintEqual(req.SourcePath, dest, req.SizeBytes, req.SourceMtimeUtc))
             {
                 TransferJournal.DeleteFiles(dest);
                 job.State = JobState.Skipped;
@@ -476,8 +483,16 @@ public sealed class TransferEngine : IDisposable
                     overwrite = true;
                     break;
                 case ConflictDecision.RenameNew:
-                    dest = FindFreeName(dest);
-                    break;
+                    {
+                        var renamed = FindFreeName(dest);
+                        lock (_sync)
+                        {
+                            _busyDest.Remove(dest);
+                            _busyDest.Add(renamed);
+                        }
+                        dest = renamed;
+                        break;
+                    }
             }
             job.CurrentDestPath = dest;
         }
@@ -606,7 +621,7 @@ public sealed class TransferEngine : IDisposable
     {
         var resolver = _conflictResolver;
         if (resolver is null) return ConflictDecision.Skip;
-        job.State = JobState.ResolvingConflict;
+        lock (_sync) job.State = JobState.ResolvingConflict;
         _dirty = true;
         try
         {
@@ -614,7 +629,12 @@ public sealed class TransferEngine : IDisposable
         }
         finally
         {
-            job.State = JobState.Transferring;
+            lock (_sync)
+            {
+                // 询问期间可能被暂停/取消：只恢复仍在询问态的作业
+                if (job.State == JobState.ResolvingConflict)
+                    job.State = JobState.Transferring;
+            }
             _dirty = true;
         }
     }
@@ -627,7 +647,7 @@ public sealed class TransferEngine : IDisposable
         for (int i = 2; i < 1000; i++)
         {
             var candidate = Path.Combine(dir, $"{name} ({i}){ext}");
-            if (!File.Exists(candidate) && !File.Exists(candidate + ".djpart")) return candidate;
+            if (!File.Exists(candidate) && !File.Exists(candidate + ".djpart") && !File.Exists(candidate + ".djjournal")) return candidate;
         }
         throw new IOException("无法生成不冲突的文件名");
     }
@@ -793,8 +813,8 @@ public sealed class TransferEngine : IDisposable
                 j.PauseGate.Set();
             }
         }
-        foreach (var w in _workers) w.Join(3000);
-        _wake.Dispose();
-        _cts.Dispose();
+        foreach (var w in _workers) w.Join(8000);
+        try { _wake.Dispose(); } catch (ObjectDisposedException) { }
+        try { _cts.Dispose(); } catch (ObjectDisposedException) { }
     }
 }

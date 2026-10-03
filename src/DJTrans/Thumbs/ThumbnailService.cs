@@ -76,7 +76,17 @@ public sealed class ThumbnailService : IDisposable
         if (_disposed) return;
         var key = KeyFor(item);
         if (_noThumb.ContainsKey(key)) return;
-        lock (_memLock) { if (_mem.ContainsKey(key)) return; }
+        // 内存 LRU 命中：同步回填（Request 由 UI 线程调用，SetThumb→Invalidate 安全）
+        lock (_memLock)
+        {
+            if (_mem.TryGetValue(key, out var cached))
+            {
+                _lru.Remove(key);
+                _lru.AddLast(key);
+                ThumbReady?.Invoke(key, cached.Clone() as Image);
+                return;
+            }
+        }
         if (!_inFlight.TryAdd(key, 0)) return;
         var r = new ThumbRequest(item, priority);
         if (priority <= 0) _hiQ.Enqueue(r); else _loQ.Enqueue(r);
@@ -118,7 +128,7 @@ public sealed class ThumbnailService : IDisposable
             }
             catch
             {
-                _noThumb[key] = 0;
+                // 瞬态异常（拔盘/IO）不进负缓存：设备回来后同 key 仍可重试
                 _ui?.Post(k => ThumbReady?.Invoke((string)k!, null), key);
             }
             finally
@@ -126,6 +136,24 @@ public sealed class ThumbnailService : IDisposable
                 _inFlight.TryRemove(key, out _);
             }
         }
+    }
+
+    /// <summary>统一降采样到 ≤320px：控制缓存与克隆的内存/GDI 上限（DNG 内嵌预览可达 4000px+）。</summary>
+    private static Image Downscale(Image src)
+    {
+        const int cap = 320;
+        if (src.Width <= cap && src.Height <= cap) return src;
+        double scale = Math.Min((double)cap / src.Width, (double)cap / src.Height);
+        var w = Math.Max(1, (int)(src.Width * scale));
+        var h = Math.Max(1, (int)(src.Height * scale));
+        var bmp = new Bitmap(w, h);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.DrawImage(src, 0, 0, w, h);
+        }
+        src.Dispose();
+        return bmp;
     }
 
     private Image? GetOrCreate(MediaItem item, string key)
@@ -150,7 +178,7 @@ public sealed class ThumbnailService : IDisposable
                 var jpg = DngPreviewExtractor.TryExtractPreviewJpeg(fs);
                 if (jpg is { Length: > 0 })
                     using (var ms = new MemoryStream(jpg))
-                        produced = new Bitmap(ms, true);
+                        produced = Downscale(new Bitmap(ms, true));
             }
             catch { }
         }
@@ -161,6 +189,7 @@ public sealed class ThumbnailService : IDisposable
         }
         if (produced is not null)
         {
+            produced = Downscale(produced);
             try
             {
                 var tmp = cacheFile + ".tmp";

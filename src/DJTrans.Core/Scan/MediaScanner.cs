@@ -183,22 +183,23 @@ public sealed class VolumeWatcher : IDisposable
 
     public void Refresh(string reason)
     {
+        // 探测（含 DCIM 目录枚举等磁盘 IO）在锁外执行，避免 WM_DEVICECHANGE 路径阻塞 UI
+        Dictionary<char, VolumeInfo> next;
+        try
+        {
+            next = DriveInfo.GetDrives()
+                .Where(d => d.DriveType == DriveType.Removable && d.IsReady)
+                .Select(d => TryBuildVolume(d.Name[0]))
+                .Where(v => v is not null)
+                .ToDictionary(v => v!.Letter, v => v!);
+        }
+        catch (IOException) { return; } // 拔盘瞬间 GetDrives 可能抛错，等下一轮轮询
+        catch (UnauthorizedAccessException) { return; }
+
         List<VolumeInfo> added, removed, current;
         lock (_sync)
         {
             if (_disposed) return;
-            Dictionary<char, VolumeInfo> next;
-            try
-            {
-                next = DriveInfo.GetDrives()
-                    .Where(d => d.DriveType == DriveType.Removable && d.IsReady)
-                    .Select(d => TryBuildVolume(d.Name[0]))
-                    .Where(v => v is not null)
-                    .ToDictionary(v => v!.Letter, v => v!);
-            }
-            catch (IOException) { return; } // 拔盘瞬间 GetDrives 可能抛错，等下一轮轮询
-            catch (UnauthorizedAccessException) { return; }
-
             added = next.Values.Where(v => !_current.ContainsKey(v.Letter)).OrderBy(v => v.Letter).ToList();
             var nextKeys = next.Keys.ToHashSet();
             removed = _current.Values.Where(v => !nextKeys.Contains(v.Letter)).OrderBy(v => v.Letter).ToList();

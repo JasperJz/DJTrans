@@ -129,11 +129,10 @@ public sealed class TransferDock : UserControl
 
     public void ApplySnapshot(EngineSnapshot snap)
     {
-        if (_collapsed && _last is not null && SameJobs(_last, snap))
-        {
-            UpdateSummary(snap);
-            return;
-        }
+        UpdateSummary(snap);
+        // 万级作业保护：>300 行时不再全量重建表格（C2 改虚拟模式），只刷新摘要
+        if (_collapsed || snap.Jobs.Count > 300) return;
+        if (_last is not null && SameJobs(_last, snap)) return;
         _last = snap;
         int scroll = _grid.FirstDisplayedScrollingRowIndex;
         var selectedTag = _grid.CurrentRow?.Tag as long?;
@@ -170,7 +169,7 @@ public sealed class TransferDock : UserControl
     }
 
     private static bool SameJobs(EngineSnapshot a, EngineSnapshot b)
-        => a.Jobs.Count == b.Jobs.Count; // 折叠态只更新摘要
+        => a.Jobs.Count == b.Jobs.Count && a.DoneBytes == b.DoneBytes && a.FinishedCount == b.FinishedCount;
 
     private void UpdateSummary(EngineSnapshot s)
     {

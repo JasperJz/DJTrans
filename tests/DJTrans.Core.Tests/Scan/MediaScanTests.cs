@@ -21,6 +21,8 @@ public sealed class NameParserTests
     [InlineData("DJI_20251330064054_0002_D.MP4")] // 13月
     [InlineData("DJI_20251232256160_0002_D.MP4")] // 非法时分秒
     [InlineData("DJI_19990101000000_0001_D.MP4")] // 年份过旧
+    [InlineData("DJI_20250229120000_0001_D.MP4")] // 2025 非闰年 2/29
+    [InlineData("DJI_20250431120000_0001_D.MP4")] // 4/31
     [InlineData("random.bin")]
     [InlineData("")]
     [InlineData("DJI_20251230064054_0002_D_extended_suffix_extra_long_name_beyond_reasonable.MP4")]

@@ -26,7 +26,8 @@ public sealed class MainForm : Form
     private MediaItem[] _allItems = [];
     private MediaItem[] _viewItems = [];
     private CancellationTokenSource? _scanCts;
-    private ConflictDecision? _conflictApplyAll;
+    /// <summary>会话级冲突决策（-1 未定；0 Skip/1 Overwrite/2 RenameNew）。跨线程读写需原子性。</summary>
+    private volatile int _conflictApplyAll = -1;
     private int _filterKind = 0;   // 0全部 1照片 2视频 3其他
     private int _sortMode = 0;     // 0时间新→旧 1时间旧→新 2大→小 3名称
     private readonly ThumbGrid _grid = new() { Dock = DockStyle.Fill };
@@ -120,7 +121,7 @@ public sealed class MainForm : Form
 
         _dock.PauseAllRequested += () => _engine.PauseAll();
         _dock.ResumeAllRequested += () => _engine.ResumeAll();
-        _dock.RetryAllFailedRequested += () => { _conflictApplyAll = null; _engine.RetryAllFailed(); };
+        _dock.RetryAllFailedRequested += () => { _conflictApplyAll = -1; _engine.RetryAllFailed(); };
         _dock.ClearFinishedRequested += () => _engine.RemoveFinished();
         _dock.CancelRequested += id => _engine.CancelJob(id);
         _dock.ToggleCollapse();
@@ -140,23 +141,30 @@ public sealed class MainForm : Form
 
         // ---------- 事件接线 ----------
         _watcher.VolumesChanged += OnVolumesChanged;
-        _engine.SnapshotChanged += snap => BeginInvoke(() =>
+        _engine.SnapshotChanged += snap =>
         {
-            _dock.ApplySnapshot(snap);
-            UpdateStatus();
-        });
-        _thumbs.ThumbReady += (key, img) => _grid.SetThumb(key, img);
+            if (_uiGone) return;
+            try { BeginInvoke(() => { _dock.ApplySnapshot(snap); UpdateStatus(); }); }
+            catch (InvalidOperationException) { _uiGone = true; } // 窗口已销毁的退出竞态
+        };
+        _thumbs.ThumbReady += (key, img) => { if (!_uiGone) _grid.SetThumb(key, img); };
 
         Load += (_, _) =>
         {
             EnableDarkTitle();
             _watcher.Start();
         };
-        FormClosing += (_, _) =>
+        FormClosing += (_, _) => _settings.Save();
+        FormClosed += (_, _) =>
         {
-            _settings.Save();
+            _uiGone = true;
+            _engine.Dispose();   // 先停引擎（工作者不再产生事件）
+            _thumbs.Dispose();
+            _watcher.Dispose();
         };
     }
+
+    private volatile bool _uiGone;
 
     protected override void WndProc(ref Message m)
     {
@@ -317,7 +325,7 @@ public sealed class MainForm : Form
             VolumeKey = volume.VolumeKey,
             Direction = TransferDirection.Download,
         }).ToList();
-        _conflictApplyAll = null;
+        _conflictApplyAll = -1;
         _engine.EnqueueBatch(reqs, new TransferOptions
         {
             ConflictPolicy = dlg.Conflict,
@@ -336,14 +344,15 @@ public sealed class MainForm : Form
     /// <summary>工作者线程回调：封送到 UI 弹冲突对话框并阻塞等待决策（带超时兜底）。</summary>
     private ConflictDecision ResolveConflict(TransferEngine.TransferJob job)
     {
-        if (_conflictApplyAll is { } all) return all;
+        int all = _conflictApplyAll;
+        if (all >= 0) return (ConflictDecision)all;
         var tcs = new TaskCompletionSource<ConflictDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
         BeginInvoke(() =>
         {
             using var dlg = new ConflictDialog(job);
             if (dlg.ShowDialog(this) == DialogResult.OK)
             {
-                if (dlg.ApplyToAll) _conflictApplyAll = dlg.Decision;
+                if (dlg.ApplyToAll) _conflictApplyAll = (int)dlg.Decision;
                 tcs.TrySetResult(dlg.Decision);
             }
             else tcs.TrySetResult(ConflictDecision.Skip);
@@ -379,7 +388,7 @@ public sealed class MainForm : Form
                 Direction = TransferDirection.Upload,
             };
         }).ToList();
-        _conflictApplyAll = null;
+        _conflictApplyAll = -1;
         _engine.EnqueueBatch(reqs, new TransferOptions
         {
             ConflictPolicy = ConflictPolicy.SmartSkip,

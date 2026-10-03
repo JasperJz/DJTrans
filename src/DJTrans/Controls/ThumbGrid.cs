@@ -13,7 +13,8 @@ public sealed class ThumbGrid : Control
     private MediaItem[] _items = [];
     private readonly Dictionary<string, int> _keyToIndex = new(StringComparer.Ordinal);
     private Image?[] _thumbs = [];
-    private HashSet<string> _noThumb = new(StringComparer.Ordinal);
+    private readonly Queue<int> _loadOrder = new();
+    private int _loadedCount;
     private bool[] _sel = [];
     private int _selCount;
     private long _selBytes;
@@ -30,6 +31,10 @@ public sealed class ThumbGrid : Control
     private const int Pad = 10;
     private VScrollBar _vbar = null!;
     private int _scrollPos;
+    // 绘制用字体缓存（避免每格每帧分配 GDI Font）
+    private Font _fBadge = new(FontFamily.GenericSansSerif, 7.5f, FontStyle.Bold);
+    private Font _fText = new(FontFamily.GenericSansSerif, 8.25f);
+    private Font _fEmpty = new(FontFamily.GenericSansSerif, 11f);
 
     private static readonly Color Accent = Color.FromArgb(0, 120, 215);
     private static readonly Color BackColorLight = Color.FromArgb(248, 249, 250);
@@ -65,7 +70,8 @@ public sealed class ThumbGrid : Control
         foreach (var t in _thumbs) t?.Dispose();
         _items = items;
         _thumbs = new Image?[items.Length];
-        _noThumb = new HashSet<string>(StringComparer.Ordinal);
+        _loadOrder.Clear();
+        _loadedCount = 0;
         _keyToIndex.Clear();
         for (int i = 0; i < items.Length; i++) _keyToIndex[ThumbnailService.KeyFor(items[i])] = i;
         _sel = new bool[items.Length];
@@ -83,9 +89,41 @@ public sealed class ThumbGrid : Control
         if (!_keyToIndex.TryGetValue(key, out var idx) || (uint)idx >= (uint)_thumbs.Length) return;
         var old = _thumbs[idx];
         _thumbs[idx] = img;
+        if (old is null && img is not null)
+        {
+            _loadedCount++;
+            _loadOrder.Enqueue(idx);
+        }
+        else if (old is not null && img is null)
+        {
+            _loadedCount--;
+        }
         old?.Dispose();
-        if (img is null) _noThumb.Add(key);
+        if (img is not null) EvictBeyondCap();
         InvalidateTile(idx);
+    }
+
+    /// <summary>网格侧缩略图上限：可视区+预读的 3 倍且 ≥600。超出按加载序淘汰（可视区豁免），
+    /// 防 10k+ 大卡滚动耗尽内存/GDI。</summary>
+    private void EvictBeyondCap()
+    {
+        var (vf, vl) = VisibleRange();
+        int cap = Math.Max(600, (vl - vf + 1 + Columns * 2) * 3);
+        int guard = 0;
+        while (_loadedCount > cap && _loadOrder.Count > 0 && guard++ < 10000)
+        {
+            var idx = _loadOrder.Dequeue();
+            if (idx >= _thumbs.Length || _thumbs[idx] is null) continue;
+            if (idx >= vf && idx <= vl + Columns * 2)
+            {
+                _loadOrder.Enqueue(idx); // 可视区/预读豁免，重新排队
+                continue;
+            }
+            _thumbs[idx]!.Dispose();
+            _thumbs[idx] = null;
+            _loadedCount--;
+            InvalidateTile(idx);
+        }
     }
 
     private void InvalidateTile(int idx)
@@ -198,7 +236,7 @@ public sealed class ThumbGrid : Control
             };
             if (badge is not null)
             {
-                using var f = new Font(Font.FontFamily, 7.5f, FontStyle.Bold);
+                var f = _fBadge;
                 var sz = g.MeasureString(badge, f);
                 var br = new Rectangle(tile.Right - (int)sz.Width - 8, tile.Bottom - (int)sz.Height - 8, (int)sz.Width + 8, (int)sz.Height + 4);
                 using (var b = new SolidBrush(Color.FromArgb(170, 0, 0, 0))) g.FillRectangle(b, br);
@@ -221,7 +259,7 @@ public sealed class ThumbGrid : Control
                 {
                     line1 = name[..16] + "…";
                 }
-                using var f = new Font(Font.FontFamily, 8.25f);
+                var f = _fText;
                 g.DrawString(line1, f, nameBrush, labelRect.X, labelRect.Y);
                 var meta = $"{FmtBytes(item.SizeBytes)} · {item.SortTimeLocal:MM-dd HH:mm}";
                 using var metaBrush = new SolidBrush(Color.FromArgb(130, 130, 130));
@@ -233,7 +271,7 @@ public sealed class ThumbGrid : Control
         // 空态
         if (_items.Length == 0)
         {
-            using var f = new Font(Font.FontFamily, 11f);
+            var f = _fEmpty;
             var txt = "没有可显示的媒体文件";
             var sz = g.MeasureString(txt, f);
             g.DrawString(txt, f, Brushes.Gray, (ClientWidth - sz.Width) / 2, (ClientSize.Height - sz.Height) / 2);
@@ -261,7 +299,7 @@ public sealed class ThumbGrid : Control
             MediaKind.Video => "🎬",
             _ => "📄",
         };
-        using var f = new Font(Font.FontFamily, 9f);
+        using var f = _fText;
         var txt = $"{kind} {ext}";
         var sz = g.MeasureString(txt, f);
         g.DrawString(txt, f, Brushes.Gray, tile.X + (tile.Width - sz.Width) / 2, tile.Y + (tile.Height - sz.Height) / 2);

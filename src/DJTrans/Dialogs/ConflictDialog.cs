@@ -40,7 +40,7 @@ public sealed class ConflictDialog : Form
         b2.Click += (_, _) => Decision = ConflictDecision.Overwrite;
         var b3 = new Button { Text = "保留两者(改名)", Location = new Point(210, 130), Width = 120, DialogResult = DialogResult.OK };
         b3.Click += (_, _) => Decision = ConflictDecision.RenameNew;
-        var bc = new Button { Text = "取消传输", Location = new Point(414, 130), Width = 90, DialogResult = DialogResult.Cancel };
+        var bc = new Button { Text = "跳过本文件", Location = new Point(414, 130), Width = 90, DialogResult = DialogResult.Cancel };
 
         AcceptButton = b1;
         CancelButton = bc;

@@ -118,8 +118,11 @@ public sealed class TransferJournal
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
-    /// <summary>快速指纹比对：首尾各 ≤8MB 的 XxHash3。用于 SmartSkip 判定"目标已是同一文件"。</summary>
-    public static bool QuickFingerprintEqual(string fileA, string fileB, long sizeHint)
+    /// <summary>
+    /// 快速指纹比对。mtimeHint 命中（目标 mtime == 源 mtime，我们自己的导出会保留）时
+    /// 只比对首尾各 2MB；否则（外来文件）保守比对首尾各 8MB。
+    /// </summary>
+    public static bool QuickFingerprintEqual(string fileA, string fileB, long sizeHint, DateTime? mtimeHint = null)
     {
         try
         {
@@ -127,7 +130,10 @@ public sealed class TransferJournal
             using var b = File.Open(fileB, FileMode.Open, FileAccess.Read, FileShare.Read);
             if (a.Length != b.Length) return false;
             if (sizeHint >= 0 && a.Length != sizeHint) return false;
-            var n = (int)Math.Min(MaxPreviewBytes, a.Length);
+            bool trusted = false;
+            if (mtimeHint is { } mt)
+                trusted = File.GetLastWriteTimeUtc(fileB) == mt;
+            int n = (int)Math.Min(trusted ? 2L * 1024 * 1024 : MaxPreviewBytes, a.Length);
             if (!HashRangeEqual(a, b, 0, n)) return false;
             if (a.Length > n)
                 return HashRangeEqual(a, b, a.Length - n, n);

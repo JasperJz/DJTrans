@@ -65,7 +65,14 @@ public static partial class NameParser
         int year = (int)packed;
         if (year is < 2000 or > 2100 || month is < 1 or > 12 || day is < 1 or > 31 ||
             hour > 23 || minute > 59 || second > 59) return null;
-        // 相机时间戳按本地墙钟时间对待，不做时区换算（跨 DST 边界也不漂移）
-        return new DateTime(year, month, day, hour, minute, second, DateTimeKind.Unspecified);
+        try
+        {
+            // 相机时间戳按本地墙钟时间对待，不做时区换算（跨 DST 边界也不漂移）
+            return new DateTime(year, month, day, hour, minute, second, DateTimeKind.Unspecified);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null; // 2 月 30 日等：回退 mtime，绝不因文件名异常丢弃条目
+        }
     }
 }

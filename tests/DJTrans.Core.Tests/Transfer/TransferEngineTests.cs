@@ -392,6 +392,114 @@ public sealed class TransferEngineTests : IDisposable
         Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
         Assert.Equal(JobState.Done, eng.Snapshot().Jobs.Single().State);
     }
+
+    // ---------- R1-B1 状态机回归：冲突询问期间暂停 → 回答后必须停在 Paused，可恢复 ----------
+
+    [Fact]
+    public void PauseDuringConflictDialog_ThenAnswer_JobPausesNotDeadlocks()
+    {
+        var src = MakeSource("DJI_20260101010120_0020_D.MP4", 16L * 1024 * 1024);
+        var dst = Path.Combine(_dstDir, Path.GetFileName(src));
+        MakeSource("DJI_20260101010120_0020_D.MP4", 16L * 1024 * 1024); // 建两次随机内容不同
+        File.Copy(src + "", dst, true); // 目标同名存在 → 触发 SmartSkip 的询问分支
+        // 让两次内容必然不同：覆盖 dst 尾部
+        using (var f = File.Open(dst, FileMode.Open, FileAccess.Write))
+        {
+            f.Seek(-1, SeekOrigin.End);
+            f.WriteByte((byte)(new FileInfo(src).Length ^ 0x5A));
+        }
+        File.SetLastWriteTimeUtc(dst, DateTime.UtcNow.AddDays(-3));
+
+        var resolverEntered = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<ConflictDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var eng = new TransferEngine(workers: 1, j =>
+        {
+            resolverEntered.TrySetResult(j.Id);
+            return answer.Task.Result; // 阻塞到测试放行
+        });
+        eng.EnqueueBatch([Req(src)], new TransferOptions { ConflictPolicy = ConflictPolicy.SmartSkip });
+        Assert.True(resolverEntered.Task.Wait(5000));
+        long id = resolverEntered.Task.Result;
+
+        // 询问期间暂停（R1-B1 路径1：曾导致 finally 无条件 Transferring + 关门 → 永久卡死）
+        eng.PauseJob(id);
+        answer.TrySetResult(ConflictDecision.Overwrite);
+        Assert.True(WaitUntil(() => eng.Snapshot().Jobs.Single().State == JobState.Paused), "回答后应停在 Paused 而非卡在 Transferring");
+        long bytes = eng.Snapshot().Jobs.Single().BytesDone;
+        Thread.Sleep(500);
+        Assert.Equal(bytes, eng.Snapshot().Jobs.Single().BytesDone); // 真的暂停了
+
+        eng.ResumeJob(id);
+        Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
+        Assert.Equal(JobState.Done, eng.Snapshot().Jobs.Single().State);
+        Assert.Equal(HashFile(src), HashFile(dst));
+    }
+
+    // ---------- R1-I2：worker 未持有的作业可被直接取消，且目标锁被释放 ----------
+
+    [Fact]
+    public void CancelQueuedJob_MigratesImmediately_AndFreesDestLock()
+    {
+        var srcBusy = MakeSource("DJI_20260101010121_0021_D.MP4", 8L * 1024 * 1024);
+        var srcWait = MakeSource("DJI_20260101010122_0022_D.MP4", 4L * 1024 * 1024);
+        var dstBusy = Path.Combine(_dstDir, Path.GetFileName(srcBusy));
+        File.WriteAllBytes(dstBusy, "different"u8.ToArray());
+
+        var resolverEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<ConflictDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var eng = new TransferEngine(workers: 1, _ =>
+        {
+            resolverEntered.TrySetResult(true);
+            return answer.Task.Result;
+        });
+        var r1 = eng.EnqueueBatch([Req(srcBusy)], new TransferOptions { ConflictPolicy = ConflictPolicy.SmartSkip });
+        Assert.True(resolverEntered.Task.Wait(5000)); // worker 被作业1占住（询问中）
+        var r2 = eng.EnqueueBatch([Req(srcWait)], new TransferOptions()); // 作业2 排队，无 worker 持有
+        Assert.Equal(1, r2.Accepted);
+        var id2 = eng.Snapshot().Jobs.First(j => j.SourcePath == srcWait).Id;
+
+        eng.CancelJob(id2);
+        var s = eng.Snapshot();
+        Assert.Equal(JobState.Canceled, s.Jobs.First(j => j.Id == id2).State); // 立即终态
+
+        // 目标锁已释放：同一目标可重新入队
+        var r3 = eng.EnqueueBatch([Req(srcWait)], new TransferOptions());
+        Assert.Equal(1, r3.Accepted);
+
+        answer.TrySetResult(ConflictDecision.Skip); // 放行作业1
+        Assert.True(WaitUntil(() => eng.Snapshot().AllSettled));
+    }
+
+    // ---------- R1-B1 路径2变体：排队中暂停 → 恢复必须唤醒 worker ----------
+
+    [Fact]
+    public void PauseQueuedJob_ThenResume_IsPickedUpAndCompletes()
+    {
+        var srcBusy = MakeSource("DJI_20260101010123_0023_D.MP4", 4L * 1024 * 1024);
+        var srcWait = MakeSource("DJI_20260101010124_0024_D.MP4", 4L * 1024 * 1024);
+        var dstBusy = Path.Combine(_dstDir, Path.GetFileName(srcBusy));
+        File.WriteAllBytes(dstBusy, "different"u8.ToArray());
+        var resolverEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<ConflictDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var eng = new TransferEngine(workers: 1, _ =>
+        {
+            resolverEntered.TrySetResult(true);
+            return answer.Task.Result;
+        });
+        eng.EnqueueBatch([Req(srcBusy)], new TransferOptions { ConflictPolicy = ConflictPolicy.SmartSkip });
+        Assert.True(resolverEntered.Task.Wait(5000));
+        eng.EnqueueBatch([Req(srcWait)], new TransferOptions());
+        var id2 = eng.Snapshot().Jobs.First(j => j.SourcePath == srcWait).Id;
+
+        eng.PauseJob(id2);
+        Assert.Equal(JobState.Paused, eng.Snapshot().Jobs.First(j => j.Id == id2).State);
+        answer.TrySetResult(ConflictDecision.Skip); // 释放 worker
+        Thread.Sleep(300);
+        Assert.Equal(JobState.Paused, eng.Snapshot().Jobs.First(j => j.Id == id2).State); // 暂停期间不被领取
+
+        eng.ResumeJob(id2);
+        Assert.True(WaitUntil(() => eng.Snapshot().Jobs.First(j => j.Id == id2).State == JobState.Done), "恢复后必须被 worker 领取并完成");
+    }
 }
 
 public sealed class JournalUnitTests : IDisposable

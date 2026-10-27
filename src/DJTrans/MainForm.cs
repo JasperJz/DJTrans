@@ -200,6 +200,18 @@ public sealed class MainForm : Form
 
     private void OnVolumesChanged(object? sender, VolumeChangedEventArgs e)
     {
+        try
+        {
+            OnVolumesChangedCore(e);
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write(ex, "设备热插拔处理");
+        }
+    }
+
+    private void OnVolumesChangedCore(VolumeChangedEventArgs e)
+    {
         _volumes.Clear();
         _volumes.AddRange(e.Current);
         _deviceList.Items.Clear();
@@ -245,21 +257,33 @@ public sealed class MainForm : Form
         _stItems.Text = "扫描中…";
         Task.Run(() =>
         {
-            try
+            // 相机刚插入时 exFAT 可能尚未挂载完成：IOException 自动退避重试（1s/2s/4s）
+            for (int attempt = 1; ; attempt++)
             {
-                var result = MediaScanner.Scan(vol.Letter, vol.VolumeKey, ct);
-                BeginInvoke(() =>
+                try
                 {
-                    if (_current?.Letter != vol.Letter) return;
-                    _allItems = result.Items.ToArray();
-                    ApplyView();
-                    _stItems.Text = $"扫描完成：{_allItems.Length} 项（{result.Elapsed.TotalSeconds:F1}s）";
-                });
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                BeginInvoke(() => { _stItems.Text = $"扫描失败：{ex.Message}"; });
+                    var result = MediaScanner.Scan(vol.Letter, vol.VolumeKey, ct);
+                    BeginInvoke(() =>
+                    {
+                        if (_current?.Letter != vol.Letter) return;
+                        _allItems = result.Items.ToArray();
+                        ApplyView();
+                        _stItems.Text = $"扫描完成：{_allItems.Length} 项（{result.Elapsed.TotalSeconds:F1}s）";
+                    });
+                    return;
+                }
+                catch (OperationCanceledException) { return; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 4)
+                {
+                    CrashLog.Write(ex, $"扫描重试{attempt} {vol.DisplayName}");
+                    Thread.Sleep(1000 << (attempt - 1));
+                }
+                catch (Exception ex)
+                {
+                    CrashLog.Write(ex, $"扫描失败 {vol.DisplayName}");
+                    BeginInvoke(() => { _stItems.Text = $"扫描失败（已重试）：{ex.Message}"; });
+                    return;
+                }
             }
         }, ct);
     }

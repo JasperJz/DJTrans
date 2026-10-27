@@ -203,68 +203,14 @@ public sealed class ThumbGrid : Control
         var (first, last) = VisibleRange();
         for (int i = first; i <= last; i++)
         {
-            var item = _items[i];
-            var tile = TileRect(i)!.Value;
-            var cell = CellRect(i);
-
-            // 背景
-            using (var bg = new SolidBrush(_sel[i] ? Color.FromArgb(217, 235, 253) : TileBack))
-                g.FillRectangle(bg, cell);
-            if (_sel[i])
-                using (var pen = new Pen(Accent, 2))
-                    g.DrawRectangle(pen, cell.X + 1, cell.Y + 1, cell.Width - 2, cell.Height - 2);
-
-            // 缩略图
-            var img = _thumbs[i];
-            if (img is not null)
+            try
             {
-                DrawFitted(g, img, tile);
+                PaintTile(g, i);
             }
-            else
+            catch (Exception ex)
             {
-                DrawPlaceholder(g, tile, item);
-            }
-
-            // 类型角标（视频/代理）
-            var badge = item.Kind switch
-            {
-                MediaKind.Video => "MP4",
-                MediaKind.Proxy => "LRF",
-                MediaKind.Subtitle => "SRT",
-                MediaKind.Other => Path.GetExtension(item.Name).TrimStart('.').ToUpperInvariant(),
-                _ => null,
-            };
-            if (badge is not null)
-            {
-                var f = _fBadge;
-                var sz = g.MeasureString(badge, f);
-                var br = new Rectangle(tile.Right - (int)sz.Width - 8, tile.Bottom - (int)sz.Height - 8, (int)sz.Width + 8, (int)sz.Height + 4);
-                using (var b = new SolidBrush(Color.FromArgb(170, 0, 0, 0))) g.FillRectangle(b, br);
-                using var fg = new SolidBrush(Color.White);
-                g.DrawString(badge, f, fg, br.X + 4, br.Y + 1);
-            }
-            if (item.Kind == MediaKind.Video)
-            {
-                DrawPlayGlyph(g, tile);
-            }
-
-            // 文件名（两行截断）+ 大小
-            var labelRect = new Rectangle(cell.X + Pad, tile.Bottom + 2, cell.Width - Pad * 2, LabelH);
-            using (var nameBrush = new SolidBrush(LabelColor))
-            {
-                var name = item.Name;
-                var line1 = name;
-                string? line2 = null;
-                if (name.Length > 18)
-                {
-                    line1 = name[..16] + "…";
-                }
-                var f = _fText;
-                g.DrawString(line1, f, nameBrush, labelRect.X, labelRect.Y);
-                var meta = $"{FmtBytes(item.SizeBytes)} · {item.SortTimeLocal:MM-dd HH:mm}";
-                using var metaBrush = new SolidBrush(Color.FromArgb(130, 130, 130));
-                g.DrawString(meta, f, metaBrush, labelRect.X, labelRect.Y + 15);
-                _ = line2;
+                // 单块磁贴绘制异常绝不冒泡成用户可见错误弹窗（曾经的真实事故：using 误释放共享字体）
+                CrashLog.Write(ex, $"磁贴绘制 idx={i}");
             }
         }
 
@@ -275,6 +221,65 @@ public sealed class ThumbGrid : Control
             var txt = "没有可显示的媒体文件";
             var sz = g.MeasureString(txt, f);
             g.DrawString(txt, f, Brushes.Gray, (ClientWidth - sz.Width) / 2, (ClientSize.Height - sz.Height) / 2);
+        }
+    }
+
+    private void PaintTile(Graphics g, int i)
+    {
+        var item = _items[i];
+        var tile = TileRect(i)!.Value;
+        var cell = CellRect(i);
+
+        // 背景
+        using (var bg = new SolidBrush(_sel[i] ? Color.FromArgb(217, 235, 253) : TileBack))
+            g.FillRectangle(bg, cell);
+        if (_sel[i])
+            using (var pen = new Pen(Accent, 2))
+                g.DrawRectangle(pen, cell.X + 1, cell.Y + 1, cell.Width - 2, cell.Height - 2);
+
+        // 缩略图
+        var img = _thumbs[i];
+        if (img is not null)
+        {
+            DrawFitted(g, img, tile);
+        }
+        else
+        {
+            DrawPlaceholder(g, tile, item);
+        }
+
+        // 类型角标（视频/代理）
+        var badge = item.Kind switch
+        {
+            MediaKind.Video => "MP4",
+            MediaKind.Proxy => "LRF",
+            MediaKind.Subtitle => "SRT",
+            MediaKind.Other => Path.GetExtension(item.Name).TrimStart('.').ToUpperInvariant(),
+            _ => null,
+        };
+        if (badge is not null)
+        {
+            var f = _fBadge;
+            var sz = g.MeasureString(badge, f);
+            var br = new Rectangle(tile.Right - (int)sz.Width - 8, tile.Bottom - (int)sz.Height - 8, (int)sz.Width + 8, (int)sz.Height + 4);
+            using (var b = new SolidBrush(Color.FromArgb(170, 0, 0, 0))) g.FillRectangle(b, br);
+            using var fg = new SolidBrush(Color.White);
+            g.DrawString(badge, f, fg, br.X + 4, br.Y + 1);
+        }
+        if (item.Kind == MediaKind.Video)
+        {
+            DrawPlayGlyph(g, tile);
+        }
+
+        // 文件名（两行截断）+ 大小
+        var labelRect = new Rectangle(cell.X + Pad, tile.Bottom + 2, cell.Width - Pad * 2, LabelH);
+        using (var nameBrush = new SolidBrush(LabelColor))
+        {
+            var line1 = item.Name.Length > 18 ? item.Name[..16] + "…" : item.Name;
+            g.DrawString(line1, _fText, nameBrush, labelRect.X, labelRect.Y);
+            var meta = $"{FmtBytes(item.SizeBytes)} · {item.SortTimeLocal:MM-dd HH:mm}";
+            using var metaBrush = new SolidBrush(Color.FromArgb(130, 130, 130));
+            g.DrawString(meta, _fText, metaBrush, labelRect.X, labelRect.Y + 15);
         }
     }
 
@@ -299,7 +304,7 @@ public sealed class ThumbGrid : Control
             MediaKind.Video => "🎬",
             _ => "📄",
         };
-        using var f = _fText;
+        var f = _fText;
         var txt = $"{kind} {ext}";
         var sz = g.MeasureString(txt, f);
         g.DrawString(txt, f, Brushes.Gray, tile.X + (tile.Width - sz.Width) / 2, tile.Y + (tile.Height - sz.Height) / 2);
